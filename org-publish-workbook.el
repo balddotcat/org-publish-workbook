@@ -1,16 +1,36 @@
-;;; org-publish-workbook -*- lexical-binding: t; -*-
+;;; org-publish-workbook.el --- an org-publish pipeline utilizing ox-slimhtml -*- lexical-binding: t; -*-
+
 ;; Copyright (C) 2018 Elo Laszlo
+
+;; Author: Elo Laszlo <hello at bald dot cat>
+;; Created: December 2018
+;; Package-Version: 0.1.0
+;; Keywords: files
+;; Homepage: https://github.com/balddotcat/org-publish-workbook
+;; Package-Requires: ((emacs "24"))
+
+;; This file is not part of GNU Emacs
+
+;;; License:
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this file.  If not, see <http://www.gnu.org/licenses/>.
+
+;;; Commentary:
+;; WIP
 
 (and (require 'package) (package-initialize))
 (require 'ox-publish)
-
-(require 'ox-slimhtml (expand-file-name "~/workbook/.lib/slimhtml/ox-slimhtml.el"))
-(require 'posthtml (expand-file-name "~/workbook/.lib/posthtml/posthtml.el"))
-
-(setq debug-on-error nil)
-
-(setq org-html-htmlize-output-type nil)
-(setq org-publish-list-skipped-files nil)
+(require 'ox-slimhtml)
 
 (defconst org-publish-workbook--path-root
   (expand-file-name "~/workbook")
@@ -33,7 +53,6 @@ PROJECTS are added to `org-publish-project-alist'."
     (when projects
       (mapc (lambda (project)
               (org-publish-workbook-add-project backend project))
-              ;; (apply 'org-publish-workbook-add-project backend project))
             projects))))
 
 (defun org-publish-workbook-backend (label &rest backend-properties)
@@ -65,10 +84,10 @@ PROJECTS are added to `org-publish-project-alist'."
     (plist-put project-properties :completion-function
                (when param (plist-get param :completion-function)))
     (seq-reduce (lambda (project hook)
-                  (apply 'org-publish-workbook-add-hook project (car hook) (cdr hook)))
+                  (apply 'org-publish-workbook-decorate (car hook) project (cdr hook)))
                 (seq-filter 'identity (list
                                        (when template
-                                         `(org-publish-workbook-hook--insert-template ,template))))
+                                         `(:before-processing org-publish-workbook--insert-template ,template))))
                 (cons (if project
                           (format "%s-%s" workbook (car project))
                         (format "%s" workbook))
@@ -87,20 +106,45 @@ PROJECTS are added to `org-publish-project-alist'."
                       #'(lambda (new-project old-project) (string= (car new-project) (car old-project))))
          project-label)))
 
-(defun org-publish-workbook-add-hook (project fn &rest args)
-  (let ((project-properties (cdr project)))
+(defun org-publish-workbook-decorate (hook-type project fn &rest args)
+  (let* ((project-properties (cdr project))
+         (add-hook (pcase (identity hook-type)
+                     (:before-processing 'org-publish-workbook-decorate-before-processing)
+                     (_ 'org-publish-workbook-decorate-final-output)))
+         (remove-hook (pcase (identity hook-type)
+                        (:before-processing 'org-publish-workbook-decorate-remove-before-processing-hook)
+                        (_ 'org-publish-workbook-decorate-remove-final-output-hook)))
+         (hook (apply add-hook fn args)))
     (plist-put project-properties :preparation-function
-               (cons (apply 'org-publish-workbook-hook fn args)
+               (cons hook
                      (plist-get project-properties :preparation-function)))
     (plist-put project-properties :completion-function
-               (cons (apply 'org-publish-workbook-hook fn args)
-                     (plist-get project-properties :completion-function)))
+               (cons (funcall remove-hook hook)
+                     (plist-get project-properties :preparation-function)))
     (cons (car project) project-properties)))
 
-(defun org-publish-workbook-hook (fn &rest args)
+(defun org-publish-workbook-decorate-final-output (fn &rest args)
+  (lambda (project-properties)
+    (add-to-list 'org-export-filter-final-output-functions
+                 (lambda (content backend info)
+                   (apply fn content info args)))))
+
+(defun org-publish-workbook-decorate-remove-final-output-hook (fn)
+  (lambda (project-properties)
+    (setq org-export-filter-final-output-functions
+          (seq-filter (lambda (filter)
+                        (and (not (eq filter fn)) filter))
+                      org-export-filter-final-output-functions))))
+
+(defun org-publish-workbook-decorate-before-processing (fn &rest args)
   (lambda (project-properties)
     (add-hook 'org-export-before-processing-hook
-              (lambda (backend) (apply fn args)))))
+              (lambda (backend)
+                (apply fn args)))))
+
+(defun org-publish-workbook-decorate-remove-before-processing-hook (fn)
+  (lambda (project-properties)
+    (remove-hook 'org-export-before-processing-hook fn)))
 
 (defun org-publish-workbook-template-path (workbook &optional project)
   (let* ((template (when project (plist-get (cdr project) :template)))
@@ -115,7 +159,7 @@ PROJECTS are added to `org-publish-project-alist'."
                       (format "%s-%s.org" workbook template)
                       (format "%s.org" workbook))))))
 
-(defun org-publish-workbook-hook--insert-template (template)
+(defun org-publish-workbook--insert-template (template)
   (save-excursion
     (goto-char (point-min))
     (if (re-search-forward "^#\\+SETUPFILE: " nil t)
