@@ -296,9 +296,11 @@ Absolute paths are retained, otherwise paths are relative to
 workbook :template-directory."
   (let* ((defaults (or (cdr (assoc workbook org-publish-workbook-alist))
                        (list)))
-         (template (or (when project (plist-get (cdr project) :template))
+         (template (when project (plist-get (cdr project) :template)))
+         (template (or (when template (and (not (equal 't template)) template))
                        (plist-get defaults :template)))
-         (template (format "%s" (or template (car project)))))
+         (template (or (when template (and (not (equal 't template)) (format "%s" template)))
+                       (car project))))
     (if (and template (string-prefix-p "/" template)) template
       (let ((template-directory (or (plist-get defaults :template-directory)
                                     org-publish-workbook-template-directory)))
